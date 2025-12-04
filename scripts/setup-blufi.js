@@ -860,7 +860,49 @@ function installIOS() {
     writeFile(path.join(targetDir, 'BlufiBridge.m'), BLUFI_BRIDGE_M);
     writeFile(path.join(targetDir, 'BluetoothScannerModule.m'), BLUETOOTH_SCANNER_MODULE_M);
 
-    console.log('ℹ️  Remember to add "pod \'BluFi\'" to your Podfile and run "pod install".');
+    // Patch Podfile
+    const podfilePath = path.join(IOS_DIR, 'Podfile');
+    if (fs.existsSync(podfilePath)) {
+        let podfileContent = fs.readFileSync(podfilePath, 'utf8');
+        if (!podfileContent.includes("pod 'BluFi'")) {
+            console.log('🔧 Patching Podfile...');
+            // Insert after use_expo_modules! or use_react_native!
+            if (podfileContent.includes('use_expo_modules!')) {
+                podfileContent = podfileContent.replace('use_expo_modules!', "use_expo_modules!\n  pod 'BluFi'");
+            } else if (podfileContent.includes('use_react_native!')) {
+                podfileContent = podfileContent.replace('use_react_native!', "pod 'BluFi'\n  use_react_native!");
+            } else {
+                console.log('⚠️ Could not find insertion point in Podfile. Please add "pod \'BluFi\'" manually.');
+            }
+            fs.writeFileSync(podfilePath, podfileContent);
+            console.log('✅ Added BluFi pod to Podfile');
+        } else {
+            console.log('✅ Podfile already patched');
+        }
+    }
+
+    // Patch Info.plist
+    const infoPlistPath = path.join(targetDir, 'Info.plist');
+    if (fs.existsSync(infoPlistPath)) {
+        let plistContent = fs.readFileSync(infoPlistPath, 'utf8');
+        if (!plistContent.includes('NSBluetoothAlwaysUsageDescription')) {
+            console.log('🔧 Patching Info.plist...');
+            const permissions = `
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>We need Bluetooth to connect to and provision the sensor device.</string>
+    <key>NSBluetoothPeripheralUsageDescription</key>
+    <string>We need Bluetooth to connect to and provision the sensor device.</string>`;
+            
+            // Insert inside <dict>
+            plistContent = plistContent.replace('<dict>', `<dict>${permissions}`);
+            fs.writeFileSync(infoPlistPath, plistContent);
+            console.log('✅ Added Bluetooth permissions to Info.plist');
+        } else {
+            console.log('✅ Info.plist already patched');
+        }
+    }
+
+    console.log('ℹ️  Run "pod install" in the ios/ directory to finish.');
 }
 
 function installJS() {
