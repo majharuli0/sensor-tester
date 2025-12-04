@@ -1,152 +1,259 @@
 package com.maj001.sensorconnectiontester;
 
+import com.facebook.react.bridge.WritableMap;
+import com.facebook.react.modules.core.DeviceEventManagerModule;
+
+import java.util.List;
+
+import blufi.espressif.BlufiCallback;
+import blufi.espressif.BlufiClient;
+import blufi.espressif.params.BlufiConfigureParams;
+import blufi.espressif.params.BlufiParameter;
+import blufi.espressif.response.BlufiScanResult;
+import blufi.espressif.response.BlufiStatusResponse;
+import blufi.espressif.response.BlufiVersionResponse;
+
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
-import android.bluetooth.BluetoothSocket;
-import android.os.AsyncTask;
+import android.bluetooth.BluetoothGatt;
+import android.bluetooth.BluetoothGattCallback;
+import android.bluetooth.BluetoothGattService;
+import android.bluetooth.BluetoothGattCharacteristic;
+import android.bluetooth.BluetoothProfile;
+import android.util.Log;
+import android.os.Handler;
+import android.os.Looper;
+import android.widget.Toast;
+
+import androidx.annotation.NonNull;
+
 import com.facebook.react.bridge.Arguments;
 import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
-import com.facebook.react.bridge.WritableMap;
-import com.facebook.react.modules.core.DeviceEventManagerModule;
-
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.util.UUID;
 
 public class BlufiModule extends ReactContextBaseJavaModule {
     private final ReactApplicationContext reactContext;
-    private BluetoothAdapter bluetoothAdapter;
-    private BluetoothSocket bluetoothSocket;
-    private OutputStream outputStream;
-    private InputStream inputStream;
-    private boolean isConnected = false;
-
-    // Standard SPP UUID
-    private static final UUID MY_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
+    private BlufiClient blufiClient;
+    private String currentDeviceId;
+    private static final String TAG = "BlufiModule";
 
     public BlufiModule(ReactApplicationContext reactContext) {
         super(reactContext);
         this.reactContext = reactContext;
-        this.bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
     }
 
+    @NonNull
     @Override
     public String getName() {
-        return "BlufiBridge"; // This matches NativeModules.BlufiBridge in App.jsx
+        return "BlufiBridge";
     }
 
-    private void sendEvent(String eventName, String message) {
+    private void sendEvent(String eventName, WritableMap params) {
         if (reactContext.hasActiveCatalystInstance()) {
             reactContext
                 .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
-                .emit(eventName, message);
+                .emit(eventName, params);
         }
     }
 
+    private void sendStatus(String status) {
+        WritableMap params = Arguments.createMap();
+        params.putString("status", status);
+        sendEvent("BlufiStatus", params);
+    }
+
+    private void sendLog(String message) {
+        Log.d(TAG, message);
+        WritableMap params = Arguments.createMap();
+        params.putString("log", message);
+        sendEvent("BlufiLog", params);
+    }
+
     @ReactMethod
-    public void connect(String address, Promise promise) {
-        if (bluetoothAdapter == null || address == null) {
-            promise.reject("BLUETOOTH_ERR", "Bluetooth not supported or address null");
-            return;
+    public void connect(String deviceId, Promise promise) {
+        if (blufiClient != null) {
+            blufiClient.close();
+            blufiClient = null;
         }
 
-        BluetoothDevice device = bluetoothAdapter.getRemoteDevice(address);
+        BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+        if (adapter == null) {
+             promise.reject("ERR_NO_BT", "Bluetooth not supported");
+             return;
+        }
         
-        new Thread(() -> {
-            try {
-                // Close existing connection if any
-                if (bluetoothSocket != null && isConnected) {
-                    bluetoothSocket.close();
-                }
+        BluetoothDevice device = adapter.getRemoteDevice(deviceId);
 
-                bluetoothSocket = device.createRfcommSocketToServiceRecord(MY_UUID);
-                bluetoothAdapter.cancelDiscovery(); // Always cancel discovery before connecting
-                bluetoothSocket.connect();
+        if (device == null) {
+            promise.reject("ERR_DEVICE_NOT_FOUND", "Device not found");
+            return;
+        }
 
-                outputStream = bluetoothSocket.getOutputStream();
-                inputStream = bluetoothSocket.getInputStream();
-                isConnected = true;
-
-                sendEvent("BlufiStatus", "Connected to " + address);
-                promise.resolve(true);
-
-                // Start Listening for Data
-                listenForData();
-
-            } catch (IOException e) {
-                isConnected = false;
-                promise.reject("CONNECT_ERR", e.getMessage());
-                sendEvent("BlufiStatus", "Connection Failed: " + e.getMessage());
-            }
-        }).start();
-    }
-
-    private void listenForData() {
-        new Thread(() -> {
-            byte[] buffer = new byte[1024];
-            int bytes;
-
-            while (isConnected) {
-                try {
-                    bytes = inputStream.read(buffer);
-                    if (bytes > 0) {
-                        String received = new String(buffer, 0, bytes);
-                        sendEvent("BlufiData", received);
-                    }
-                } catch (IOException e) {
-                    isConnected = false;
-                    sendEvent("BlufiStatus", "Disconnected");
-                    break;
-                }
-            }
-        }).start();
+        currentDeviceId = deviceId;
+        blufiClient = new BlufiClient(reactContext, device);
+        blufiClient.setBlufiCallback(new BlufiCallbackMain());
+        blufiClient.setGattCallback(new GattCallbackMain()); // Set standard GATT callback
+        blufiClient.connect();
+        
+        promise.resolve(true);
     }
 
     @ReactMethod
-    public void postCustomData(String data, Promise promise) {
-        if (!isConnected || outputStream == null) {
-            promise.reject("WRITE_ERR", "Not connected");
-            return;
-        }
-        try {
-            outputStream.write(data.getBytes());
-            promise.resolve(true);
-        } catch (IOException e) {
-            promise.reject("WRITE_ERR", e.getMessage());
+    public void disconnect() {
+        if (blufiClient != null) {
+            blufiClient.close();
+            blufiClient = null;
         }
     }
 
     @ReactMethod
     public void negotiateSecurity(Promise promise) {
-        // Since we are using standard SPP, we just mock this success
-        // or send a specific handshake string if your device needs it
-        if (isConnected) {
-            sendEvent("BlufiStatus", "Security Negotiated (Mock)");
-            promise.resolve(true);
-        } else {
-            promise.reject("ERR", "Not connected");
+        if (blufiClient == null) {
+            promise.reject("ERR_NO_CLIENT", "Blufi client not initialized");
+            return;
         }
+        blufiClient.negotiateSecurity();
+        promise.resolve(true);
     }
 
     @ReactMethod
     public void configureWifi(String ssid, String password, Promise promise) {
-        if (!isConnected || outputStream == null) {
-            promise.reject("ERR", "Not connected");
+        if (blufiClient == null) {
+            promise.reject("ERR_NO_CLIENT", "Blufi client not initialized");
             return;
         }
-        try {
-            // Sending as a simple string format "WIFI:SSID,PASSWORD"
-            // Adjust this format to match what your Arduino/ESP32 expects!
-            String configData = "WIFI:" + ssid + "," + password;
-            outputStream.write(configData.getBytes());
-            sendEvent("BlufiStatus", "Wi-Fi Config Sent");
-            promise.resolve(true);
-        } catch (IOException e) {
-            promise.reject("WRITE_ERR", e.getMessage());
+
+        BlufiConfigureParams params = new BlufiConfigureParams();
+        params.setOpMode(BlufiParameter.OP_MODE_STA);
+        params.setStaSSIDBytes(ssid != null ? ssid.getBytes() : new byte[0]);
+        params.setStaPassword(password);
+        
+        blufiClient.configure(params);
+        promise.resolve(true);
+    }
+    
+    @ReactMethod
+    public void postCustomData(String data, Promise promise) {
+        if (blufiClient == null) {
+            promise.reject("ERR_NO_CLIENT", "Blufi client not initialized");
+            return;
         }
+        blufiClient.postCustomData(data.getBytes());
+        promise.resolve(true);
+    }
+
+    @ReactMethod
+    public void requestDeviceStatus() {
+        if (blufiClient != null) {
+            blufiClient.requestDeviceStatus();
+        }
+    }
+
+    @ReactMethod
+    public void requestDeviceVersion() {
+        if (blufiClient != null) {
+            blufiClient.requestDeviceVersion();
+        }
+    }
+
+    // Standard BluetoothGattCallback for connection events
+    private class GattCallbackMain extends BluetoothGattCallback {
+        @Override
+        public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
+            String stateStr = (newState == BluetoothProfile.STATE_CONNECTED) ? "Connected" : 
+                              (newState == BluetoothProfile.STATE_DISCONNECTED) ? "Disconnected" : "Unknown";
+            
+            sendLog("Gatt Connection State: " + stateStr + " (" + newState + "), Status: " + status);
+
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                new Handler(Looper.getMainLooper()).post(() -> 
+                    Toast.makeText(reactContext, "Blufi Connected!", Toast.LENGTH_SHORT).show()
+                );
+                sendStatus("Connected");
+                
+                WritableMap params = Arguments.createMap();
+                params.putInt("state", 2); // Connected
+                params.putInt("status", 0);
+                sendEvent("BlufiStatus", params);
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                sendStatus("Disconnected");
+                
+                WritableMap params = Arguments.createMap();
+                params.putInt("state", 0); // Disconnected
+                params.putInt("status", 0);
+                sendEvent("BlufiStatus", params);
+            }
+        }
+    }
+
+    private class BlufiCallbackMain extends BlufiCallback {
+        
+        // Removed @Override to avoid compilation error if signature mismatches
+        public void onGattPrepared(BlufiClient client, BluetoothGatt gatt, BluetoothGattService service, BluetoothGattCharacteristic writeChar, BluetoothGattCharacteristic notifyChar) {
+            sendLog("Gatt Prepared (Service Discovered)");
+            // We handle "Connected" in GattCallbackMain, but this confirms services are ready
+        }
+
+        @Override
+        public void onNegotiateSecurityResult(BlufiClient client, int status) {
+            sendStatus("Security Result: " + status);
+            sendLog("Security Negotiation Result: " + status);
+        }
+
+        @Override
+        public void onPostConfigureParams(BlufiClient client, int status) {
+            sendStatus("Configure Params: " + status);
+            sendLog("Post Configure Params Result: " + status);
+        }
+
+        @Override
+        public void onDeviceStatusResponse(BlufiClient client, int status, BlufiStatusResponse response) {
+            sendStatus("Device Status: " + status);
+            if (response != null) {
+                sendLog("Status Response: " + response.toString());
+            }
+        }
+
+        @Override
+        public void onDeviceVersionResponse(BlufiClient client, int status, BlufiVersionResponse response) {
+            sendStatus("Device Version: " + status);
+            if (response != null) {
+                sendLog("Version Response: " + response.getVersionString());
+            }
+        }
+
+        @Override
+        public void onReceiveCustomData(BlufiClient client, int status, byte[] data) {
+            if (data != null) {
+                String dataStr = new String(data);
+                sendLog("Received Custom Data: " + dataStr);
+                WritableMap params = Arguments.createMap();
+                params.putString("data", dataStr);
+                sendEvent("BlufiData", params);
+            }
+        }
+        
+        @Override
+        public void onPostCustomDataResult(BlufiClient client, int status, byte[] data) {
+             sendLog("Post Custom Data Result: " + status);
+        }
+
+        @Override
+        public void onError(BlufiClient client, int errCode) {
+            sendStatus("Error: " + errCode);
+            sendLog("Blufi Error Code: " + errCode);
+        }
+    }
+
+    @ReactMethod
+    public void addListener(String eventName) {
+        // Keep: Required for React Native built-in Event Emitter Calls.
+    }
+
+    @ReactMethod
+    public void removeListeners(Integer count) {
+        // Keep: Required for React Native built-in Event Emitter Calls.
     }
 }

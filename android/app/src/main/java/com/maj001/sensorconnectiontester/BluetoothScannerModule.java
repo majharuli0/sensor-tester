@@ -2,10 +2,15 @@ package com.maj001.sensorconnectiontester;
 
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
-import android.content.BroadcastReceiver;
-import android.content.Context;
-import android.content.Intent;
-import android.content.IntentFilter;
+import android.bluetooth.le.BluetoothLeScanner;
+import android.bluetooth.le.ScanCallback;
+import android.bluetooth.le.ScanResult;
+import android.bluetooth.le.ScanSettings;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.Log;
+import android.widget.Toast;
+
 import com.facebook.react.bridge.Arguments;
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
@@ -19,7 +24,10 @@ import java.util.Set;
 public class BluetoothScannerModule extends ReactContextBaseJavaModule {
     private final ReactApplicationContext reactContext;
     private BluetoothAdapter bluetoothAdapter;
+    private BluetoothLeScanner bluetoothLeScanner;
     private Set<String> foundDevices = new HashSet<>();
+    private boolean isScanning = false;
+    private static final String TAG = "BluetoothScanner";
 
     public BluetoothScannerModule(ReactApplicationContext reactContext) {
         super(reactContext);
@@ -29,59 +37,95 @@ public class BluetoothScannerModule extends ReactContextBaseJavaModule {
 
     @Override
     public String getName() {
-        return "BluetoothScanner";
+        return "BluetoothScannerModule";
+    }
+
+    private void sendLog(String message) {
+        Log.d(TAG, message);
+        WritableMap params = Arguments.createMap();
+        params.putString("log", message);
+        sendEvent("ScanLog", params);
     }
 
     @ReactMethod
     public void startScan() {
-        if (bluetoothAdapter == null) return;
+        if (bluetoothAdapter == null) {
+            sendLog("BluetoothAdapter is null");
+            sendError("BluetoothAdapter is null");
+            return;
+        }
         
-        foundDevices.clear();
-        
-        // Register receiver for finding devices
-        IntentFilter filter = new IntentFilter(BluetoothDevice.ACTION_FOUND);
-        try {
-            reactContext.registerReceiver(receiver, filter);
-        } catch (Exception e) {
-            // Already registered or permission issue
+        bluetoothLeScanner = bluetoothAdapter.getBluetoothLeScanner();
+        if (bluetoothLeScanner == null) {
+             sendLog("BluetoothLeScanner is null");
+             sendError("BluetoothLeScanner is null (Bluetooth might be off)");
+             return;
         }
 
-        if (bluetoothAdapter.isDiscovering()) {
-            bluetoothAdapter.cancelDiscovery();
+        if (isScanning) {
+            sendLog("Already scanning");
+            return;
         }
-        bluetoothAdapter.startDiscovery();
+
+        foundDevices.clear();
+        isScanning = true;
+        
+        // Use default settings to match reference app
+        try {
+            bluetoothLeScanner.startScan(scanCallback);
+            sendLog("BLE Scan started (Default Settings)");
+        } catch (SecurityException e) {
+            sendLog("SecurityException during scan: " + e.getMessage());
+            sendError("SecurityException: " + e.getMessage());
+            isScanning = false;
+        }
     }
 
     @ReactMethod
     public void stopScan() {
-        if (bluetoothAdapter != null && bluetoothAdapter.isDiscovering()) {
-            bluetoothAdapter.cancelDiscovery();
-        }
-        try {
-            reactContext.unregisterReceiver(receiver);
-        } catch (Exception e) {
-            // Ignore if not registered
+        if (bluetoothLeScanner != null && isScanning) {
+            try {
+                bluetoothLeScanner.stopScan(scanCallback);
+                sendLog("BLE Scan stopped");
+            } catch (SecurityException e) {
+                sendLog("SecurityException during stop scan: " + e.getMessage());
+            }
+            isScanning = false;
         }
     }
 
-    private final BroadcastReceiver receiver = new BroadcastReceiver() {
-        public void onReceive(Context context, Intent intent) {
-            String action = intent.getAction();
-            if (BluetoothDevice.ACTION_FOUND.equals(action)) {
-                BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
-                if (device != null) {
-                    String address = device.getAddress();
-                    if (!foundDevices.contains(address)) {
-                        foundDevices.add(address);
-                        
-                        WritableMap params = Arguments.createMap();
-                        params.putString("name", device.getName() != null ? device.getName() : "Unknown");
-                        params.putString("id", address); // MAC Address
-                        
-                        sendEvent("DeviceFound", params);
+    private final ScanCallback scanCallback = new ScanCallback() {
+        @Override
+        public void onScanResult(int callbackType, ScanResult result) {
+            BluetoothDevice device = result.getDevice();
+            if (device != null) {
+                String address = device.getAddress();
+                // sendLog("Scanned: " + address); // Verbose logging
+                if (!foundDevices.contains(address)) {
+                    foundDevices.add(address);
+                    
+                    WritableMap params = Arguments.createMap();
+                    try {
+                        String name = device.getName();
+                        params.putString("name", name != null ? name : "Unknown");
+                        sendLog("Found: " + (name != null ? name : "Unknown") + " (" + address + ")");
+                    } catch (SecurityException e) {
+                        params.putString("name", "Unknown (Perm)");
+                        sendLog("Found: " + address + " (Perm Error)");
                     }
+                    params.putString("id", address);
+                    params.putString("mac", address);
+                    params.putInt("rssi", result.getRssi());
+                    
+                    sendEvent("DeviceFound", params);
                 }
             }
+        }
+
+        @Override
+        public void onScanFailed(int errorCode) {
+            sendLog("Scan failed: " + errorCode);
+            sendError("Scan failed with error code: " + errorCode);
         }
     };
 
@@ -90,15 +134,21 @@ public class BluetoothScannerModule extends ReactContextBaseJavaModule {
             reactContext
                 .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
                 .emit(eventName, params);
+        } else {
+            Log.e(TAG, "No active CatalystInstance, cannot send event: " + eventName);
+            // Removed Toast for production
         }
     }
-    @ReactMethod
-    public void addListener(String eventName) {
-    // Keep: Required for React Native built-in Event Emitter Calls.
+
+    private void sendError(String errorMessage) {
+        WritableMap params = Arguments.createMap();
+        params.putString("error", errorMessage);
+        sendEvent("ScanError", params);
     }
+    
+    @ReactMethod
+    public void addListener(String eventName) {}
 
     @ReactMethod
-    public void removeListeners(Integer count) {
-    // Keep: Required for React Native built-in Event Emitter Calls.
-    }
+    public void removeListeners(Integer count) {}
 }
