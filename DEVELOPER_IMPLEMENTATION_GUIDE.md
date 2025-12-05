@@ -99,3 +99,6 @@ await BlufiBridge.postCustomData("1:192.168.1.100"); // Server IP
 await BlufiBridge.postCustomData("2:1883");          // Server Port
 await BlufiBridge.postCustomData("8:0");             // Done
 ```
+
+## 4. iOS Implementation
+For iOS-specific setup, including local Pod configuration, Swift bridging, and troubleshooting, please refer to [IOS_SETUP_GUIDE.md](./IOS_SETUP_GUIDE.md).

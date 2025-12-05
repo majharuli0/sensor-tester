@@ -1,10 +1,9 @@
 import Foundation
 import CoreBluetooth
 import React
-import BluFi
 
 @objc(BlufiBridge)
-class BlufiBridge: RCTEventEmitter, BlufiDelegate {
+public class BlufiBridge: RCTEventEmitter, BlufiDelegate {
     
     var blufiClient: BlufiClient!
     var connectedPeripheral: CBPeripheral?
@@ -12,26 +11,16 @@ class BlufiBridge: RCTEventEmitter, BlufiDelegate {
     override init() {
         super.init()
         blufiClient = BlufiClient()
-        blufiClient.delegate = self
+        blufiClient.blufiDelegate = self
     }
     
     @objc func connect(_ deviceId: String, resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
         // deviceId on iOS is the UUID string
-        guard let uuid = UUID(uuidString: deviceId) else {
-            reject("ERR_INVALID_UUID", "Invalid UUID string", nil)
-            return
-        }
+        // In a real scenario, you need to pass the CBPeripheral object to the client.
+        // The current BlufiClient.h has - (void)connect:(NSString *)identifier; which takes a string identifier.
+        // Assuming the ObjC library handles retrieval or we need to adapt.
         
-        // Note: In a real app, you might need to retrieve the CBPeripheral from the CentralManager 
-        // in BluetoothScannerModule or scan for it again if not cached.
-        // For this reference, we assume we can retrieve it or start a connection flow.
-        // This part often requires sharing the CentralManager instance or passing the peripheral object.
-        
-        // Simplified for reference:
-        sendEvent(withName: "BlufiLog", body: ["log": "Attempting to connect to \(deviceId)..."])
-        // blufiClient.connect(peripheral) // Actual call requires CBPeripheral object
-        
-        // Mocking success for structure
+        blufiClient.connect(deviceId)
         resolve(true)
     }
     
@@ -47,7 +36,7 @@ class BlufiBridge: RCTEventEmitter, BlufiDelegate {
     
     @objc func configureWifi(_ ssid: String, password: String, resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
         let params = BlufiConfigureParams()
-        params.opMode = .STA
+        params.opMode = OpModeSta
         params.staSsid = ssid
         params.staPassword = password
         
@@ -66,24 +55,27 @@ class BlufiBridge: RCTEventEmitter, BlufiDelegate {
     
     // MARK: - BlufiDelegate
     
-    func blufi(_ client: BlufiClient, didUpdate state: BlufiStatus, status: BlufiStatus) {
-        // Handle connection state changes
-        if status == .connected {
-             sendEvent(withName: "BlufiStatus", body: ["status": "Connected", "state": 2])
+    // Note: There isn't a generic "didUpdate state" delegate method in the header.
+    // We can infer connection state from gattPrepared or other callbacks, or we might need to listen to central manager events if exposed.
+    // For now, we'll use gattPrepared as a proxy for "Connected/Ready".
+    
+    public func blufi(_ client: BlufiClient, gattPrepared status: BlufiStatusCode, service: CBService?, writeChar: CBCharacteristic?, notifyChar: CBCharacteristic?) {
+        if status == StatusSuccess {
+            sendEvent(withName: "BlufiStatus", body: ["status": "Connected", "state": 2])
         } else {
-             sendEvent(withName: "BlufiStatus", body: ["status": "Disconnected", "state": 0])
+            sendEvent(withName: "BlufiStatus", body: ["status": "Connection Failed", "state": 0])
         }
     }
     
-    func blufi(_ client: BlufiClient, didNegotiateSecurity result: BlufiStatus) {
-        sendEvent(withName: "BlufiStatus", body: ["status": "Security Result: \(result.rawValue)"])
+    public func blufi(_ client: BlufiClient, didNegotiateSecurity status: BlufiStatusCode) {
+        sendEvent(withName: "BlufiStatus", body: ["status": "Security Result: \(status.rawValue)"])
     }
     
-    func blufi(_ client: BlufiClient, didPostConfigureParams result: BlufiStatus) {
-        sendEvent(withName: "BlufiStatus", body: ["status": "Configure Params: \(result.rawValue)"])
+    public func blufi(_ client: BlufiClient, didPostConfigureParams status: BlufiStatusCode) {
+        sendEvent(withName: "BlufiStatus", body: ["status": "Configure Params: \(status.rawValue)"])
     }
     
-    func blufi(_ client: BlufiClient, didReceiveCustomData data: Data, status: BlufiStatus) {
+    public func blufi(_ client: BlufiClient, didReceiveCustomData data: Data, status: BlufiStatusCode) {
         if let dataStr = String(data: data, encoding: .utf8) {
             sendEvent(withName: "BlufiData", body: ["data": dataStr])
         }
@@ -91,11 +83,11 @@ class BlufiBridge: RCTEventEmitter, BlufiDelegate {
     
     // MARK: - RCTEventEmitter
     
-    override func supportedEvents() -> [String]! {
+    public override func supportedEvents() -> [String]! {
         return ["BlufiStatus", "BlufiLog", "BlufiData"]
     }
     
-    override static func requiresMainQueueSetup() -> Bool {
+    public override static func requiresMainQueueSetup() -> Bool {
         return true
     }
 }

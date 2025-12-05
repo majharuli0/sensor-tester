@@ -6,7 +6,9 @@
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "setup:ios": "node scripts/setup-ios.js",
+    "setup:android": "node scripts/setup-android.js"
   },
   "dependencies": {
     "expo": "~54.0.25",

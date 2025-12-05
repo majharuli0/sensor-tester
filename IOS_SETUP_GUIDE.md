@@ -1,57 +1,147 @@
-# iOS Setup Guide for Sensor Connection Tester
+# iOS Setup Guide for Sensor Connection Tester (Blufi)
 
-Since you are developing on Windows, you cannot generate the iOS project directly. This guide explains how to integrate the provided reference files into an iOS project (e.g., on a Mac or CI/CD).
+This guide explains how to set up the **Blufi** native module for iOS. Unlike the Android implementation which uses a Gradle library, the iOS implementation uses a **Local CocoaPod** to bridge the Swift/Objective-C code to React Native.
 
 ## 1. Prerequisites
 *   **Mac with Xcode** (Required for iOS builds).
 *   **CocoaPods** installed (`sudo gem install cocoapods`).
+*   **Node.js & NPM** installed.
 
-## 2. Project Generation (On Mac)
-Run the following in your project root:
-```bash
-npx expo prebuild --platform ios
+## 2. Project Structure (Local Pod)
+
+We use a local Pod named `BlufiBridge` to encapsulate the native code. This avoids complex manual linking in Xcode.
+
+### File Locations
+Ensure your `ios/` directory has the following structure:
+
+```text
+ios/
+├── Podfile
+├── BlufiBridge.podspec          <-- Pod definition
+├── BlufiBridge.swift            <-- Swift Bridge
+├── BlufiBridge.m                <-- Obj-C Interface
+├── BluetoothScannerModule.swift <-- Scanner Logic
+├── BluetoothScannerModule.m     <-- Scanner Interface
+└── BlufiLibrary/                <-- Espressif Blufi Library (Obj-C)
+    ├── BlufiClient.h
+    ├── BlufiClient.m
+    └── ... (other library files)
 ```
-This will create the `ios` directory.
 
-## 3. Add Dependencies (`ios/Podfile`)
-Open `ios/Podfile` and add the Espressif BluFi pod:
+### 3. Podspec Configuration (`ios/BlufiBridge.podspec`)
+This file tells CocoaPods how to build your module.
+
 ```ruby
-target 'sensorconnectiontester' do
-  # ... other pods
-  pod 'BluFi' 
+require "json"
+
+package = JSON.parse(File.read(File.join(__dir__, "../package.json")))
+
+Pod::Spec.new do |s|
+  s.name         = "BlufiBridge"
+  s.version      = package["version"]
+  s.summary      = "Blufi Bridge for Sensor Connection Tester"
+  s.homepage     = "https://github.com/example/sensor-connection-tester"
+  s.license      = "MIT"
+  s.authors      = { "Your Name" => "yourname@example.com" }
+  s.platform     = :ios, "13.0"
+  s.source       = { :git => "", :tag => "#{s.version}" }
+
+  # CRITICAL: Include all source files (Swift, Obj-C, and Library)
+  s.source_files = "BlufiBridge.{h,m,swift}", "BluetoothScannerModule.{h,m,swift}", "BlufiLibrary/**/*.{h,m}"
+  s.requires_arc = true
+
+  s.dependency "React-Core"
+  s.dependency "OpenSSL-Universal" # Required for Blufi security
 end
 ```
-Then run `pod install` inside the `ios` folder.
 
-## 4. Add Native Modules
-Copy the files from `ios-reference/` into your Xcode project (e.g., inside the main group `sensorconnectiontester`).
+### 4. Podfile Configuration (`ios/Podfile`)
+Link the local pod in your `Podfile`:
 
-*   `BluetoothScannerModule.swift`
-*   `BluetoothScannerModule.m`
-*   `BlufiBridge.swift`
-*   `BlufiBridge.m`
+```ruby
+target 'sensorconnectiontester' do
+  use_expo_modules!
+  config = use_native_modules!
 
-**Important**: When you add the first Swift file, Xcode will ask to create a **Bridging Header**. Click **"Create Bridging Header"**.
+  # ... other pods
 
-## 5. Configure Bridging Header
-Open the created `sensorconnectiontester-Bridging-Header.h` and add:
-```objc
-#import <React/RCTBridgeModule.h>
-#import <React/RCTEventEmitter.h>
-#import "AppDelegate.h"
+  # Link local BlufiBridge pod
+  pod 'BlufiBridge', :path => '.' 
+end
 ```
 
-## 6. Permissions (`Info.plist`)
-Add these keys to `ios/sensorconnectiontester/Info.plist` to allow Bluetooth usage:
-```xml
-<key>NSBluetoothAlwaysUsageDescription</key>
-<string>We need Bluetooth to connect to and provision the sensor device.</string>
-<key>NSBluetoothPeripheralUsageDescription</key>
-<string>We need Bluetooth to connect to and provision the sensor device.</string>
+## 5. Swift Implementation Details
+
+### Visibility Modifiers
+Swift classes and methods are `internal` by default. To be visible to the Objective-C runtime (and React Native), you **MUST** use `public` and `@objc`.
+
+**Example (`BluetoothScannerModule.swift`):**
+```swift
+@objc(BluetoothScannerModule)
+public class BluetoothScannerModule: RCTEventEmitter, CBCentralManagerDelegate {
+    
+    // CRITICAL: init must be public!
+    public override init() {
+        super.init()
+        // ...
+    }
+
+    @objc public func startScan() { ... }
+    
+    // ...
+}
 ```
 
-## 7. Build and Run
-Open `ios/sensorconnectiontester.xcworkspace` in Xcode and run the app on a physical device (Bluetooth does not work on Simulator).
+## 6. React Native Integration (Crash Prevention)
 
-## 8. React Native Code
-The `App.tsx` code we wrote is already compatible! It uses `NativeModules` which will automatically map to these new iOS classes.
+Native modules might be `null` if linking fails. Always check before using `NativeEventEmitter`.
+
+**Safe Implementation (`App.tsx` / `BlufiClient.ts`):**
+```typescript
+import { NativeModules, NativeEventEmitter } from 'react-native';
+
+const { BlufiBridge, BluetoothScannerModule } = NativeModules;
+
+// CRITICAL: Check for null to prevent "Invariant Violation" crash
+const blufiEmitter = BlufiBridge ? new NativeEventEmitter(BlufiBridge) : null;
+const scannerEmitter = BluetoothScannerModule ? new NativeEventEmitter(BluetoothScannerModule) : null;
+
+// Usage
+if (scannerEmitter) {
+    scannerEmitter.addListener('DeviceFound', ...);
+}
+```
+
+## 7. Troubleshooting
+
+### A. "Developer Mode disabled" (Physical Device)
+**Issue:** Build fails with `xcodebuild: error: Developer Mode disabled`.
+**Fix:**
+1.  On iPhone: **Settings > Privacy & Security > Developer Mode**.
+2.  Toggle **ON**.
+3.  Restart iPhone and follow prompts.
+
+### B. "No script URL provided"
+**Issue:** App installs but shows this error on launch.
+**Fix:**
+1.  Ensure Mac and iPhone are on the **SAME Wi-Fi**.
+2.  Start Metro Bundler: `npx expo start`.
+3.  Shake iPhone -> **Reload**.
+
+### C. "BluetoothScannerModule not found" (Runtime)
+**Issue:** App runs but scanning doesn't work; logs show module is undefined.
+**Fix:**
+1.  Ensure source files are in `ios/` root (not a subdirectory).
+2.  Ensure `BlufiBridge.podspec` includes the files.
+3.  Run:
+    ```bash
+    cd ios
+    pod install
+    cd ..
+    npx expo run:ios --device
+    ```
+
+### D. "Invariant Violation: new NativeEventEmitter() requires a non-null argument"
+**Issue:** App crashes immediately on launch.
+**Fix:**
+See **Section 6**. You are trying to create a `NativeEventEmitter` with a null module. Add null checks.

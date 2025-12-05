@@ -3,12 +3,12 @@ import CoreBluetooth
 import React
 
 @objc(BluetoothScannerModule)
-class BluetoothScannerModule: RCTEventEmitter, CBCentralManagerDelegate {
+public class BluetoothScannerModule: RCTEventEmitter, CBCentralManagerDelegate {
     
     var centralManager: CBCentralManager!
     var isScanning = false
     
-    override init() {
+    public override init() {
         super.init()
         centralManager = CBCentralManager(delegate: self, queue: nil)
     }
@@ -32,7 +32,7 @@ class BluetoothScannerModule: RCTEventEmitter, CBCentralManagerDelegate {
     
     // MARK: - CBCentralManagerDelegate
     
-    func centralManagerDidUpdateState(_ central: CBCentralManager) {
+    public func centralManagerDidUpdateState(_ central: CBCentralManager) {
         var stateStr = "Unknown"
         switch central.state {
         case .poweredOn: stateStr = "Powered On"
@@ -45,7 +45,7 @@ class BluetoothScannerModule: RCTEventEmitter, CBCentralManagerDelegate {
         sendEvent(withName: "ScanLog", body: ["log": "Bluetooth State: \(stateStr)"])
     }
     
-    func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
+    public func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
         // Filter for devices with names
         guard let name = peripheral.name else { return }
         
@@ -61,11 +61,11 @@ class BluetoothScannerModule: RCTEventEmitter, CBCentralManagerDelegate {
     
     // MARK: - RCTEventEmitter
     
-    override func supportedEvents() -> [String]! {
+    public override func supportedEvents() -> [String]! {
         return ["DeviceFound", "ScanLog", "ScanError"]
     }
     
-    override static func requiresMainQueueSetup() -> Bool {
+    public override static func requiresMainQueueSetup() -> Bool {
         return true
     }
 }

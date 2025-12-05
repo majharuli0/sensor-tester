@@ -18,8 +18,9 @@ import {
 const { BlufiBridge, BluetoothScannerModule } = NativeModules;
 
 // Create Emitters
-const blufiEmitter = new NativeEventEmitter(BlufiBridge);
-const scannerEmitter = new NativeEventEmitter(BluetoothScannerModule);
+// Create Emitters
+const blufiEmitter = BlufiBridge ? new NativeEventEmitter(BlufiBridge) : null;
+const scannerEmitter = BluetoothScannerModule ? new NativeEventEmitter(BluetoothScannerModule) : null;
 
 export default function App() {
   const [logs, setLogs] = useState<string[]>([]);
@@ -49,14 +50,14 @@ export default function App() {
           PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
           PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
         ];
-        
+
         const result = await PermissionsAndroid.requestMultiple(permissions);
         addLog("Permissions Result: " + JSON.stringify(result));
-        
+
         const allGranted = Object.values(result).every(
           (status) => status === PermissionsAndroid.RESULTS.GRANTED
         );
-        
+
         return allGranted;
       } catch (err) {
         addLog("Permission Error: " + err);
@@ -67,76 +68,90 @@ export default function App() {
   };
 
   useEffect(() => {
-    const statusSub = blufiEmitter.addListener("BlufiStatus", (event) => {
-      addLog("STATUS: " + (event.status || JSON.stringify(event)));
-      // Handle both string status and integer state (2 = Connected, 0 = Disconnected)
-      if (event.status === "Connected" || event.state === 2) {
-        setConnected(true);
-        addLog("State updated to CONNECTED");
-      }
-      if (event.status === "Disconnected" || event.state === 0) {
-        setConnected(false);
-        addLog("State updated to DISCONNECTED");
-      }
-      
-      // Handle Success Responses
-      if (typeof event.status === 'string') {
+    let statusSub: any;
+    let logSub: any;
+    let dataSub: any;
+
+    if (blufiEmitter) {
+      statusSub = blufiEmitter.addListener("BlufiStatus", (event: any) => {
+        addLog("STATUS: " + (event.status || JSON.stringify(event)));
+        // Handle both string status and integer state (2 = Connected, 0 = Disconnected)
+        if (event.status === "Connected" || event.state === 2) {
+          setConnected(true);
+          addLog("State updated to CONNECTED");
+        }
+        if (event.status === "Disconnected" || event.state === 0) {
+          setConnected(false);
+          addLog("State updated to DISCONNECTED");
+        }
+
+        // Handle Success Responses
+        if (typeof event.status === 'string') {
           if (event.status.includes("Security Result: 0")) {
-              Alert.alert("Success", "Security Negotiation Complete!");
+            Alert.alert("Success", "Security Negotiation Complete!");
           }
           if (event.status.includes("Configure Params: 0")) {
-              Alert.alert("Success", "Wi-Fi Credentials Sent! Device may reboot now.");
+            Alert.alert("Success", "Wi-Fi Credentials Sent! Device may reboot now.");
           }
-      }
-    });
-    
-    const logSub = blufiEmitter.addListener("BlufiLog", (event) => {
-      console.log("BlufiLog:", event.log);
-      addLog("LOG: " + (event.log || JSON.stringify(event)));
-    });
+        }
+      });
 
-    const dataSub = blufiEmitter.addListener("BlufiData", (event) => {
-      addLog("RECEIVED: " + (event.data || JSON.stringify(event)));
-      if (event.data && event.data.includes("uID:")) {
+      logSub = blufiEmitter.addListener("BlufiLog", (event: any) => {
+        console.log("BlufiLog:", event.log);
+        addLog("LOG: " + (event.log || JSON.stringify(event)));
+      });
+
+      dataSub = blufiEmitter.addListener("BlufiData", (event: any) => {
+        addLog("RECEIVED: " + (event.data || JSON.stringify(event)));
+        if (event.data && event.data.includes("uID:")) {
           const uid = event.data.split("uID:")[1].trim();
           setDeviceUid(uid);
           addLog("UID Extracted: " + uid);
-      }
-    });
-
-    const scanSub = scannerEmitter.addListener("DeviceFound", (device) => {
-      setScannedDevices((prev) => {
-        if (prev.some((d) => d.mac === device.mac)) return prev;
-        return [...prev, device];
+        }
       });
-    });
+    }
 
-    // New ScanLog listener
-    const scanLogSub = scannerEmitter.addListener("ScanLog", (event) => {
+    let scanSub: any;
+    let scanLogSub: any;
+    let scanErrorSub: any;
+
+    if (scannerEmitter) {
+      scanSub = scannerEmitter.addListener("DeviceFound", (device: any) => {
+        setScannedDevices((prev) => {
+          if (prev.some((d) => d.mac === device.mac)) return prev;
+          return [...prev, device];
+        });
+      });
+
+      // New ScanLog listener
+      scanLogSub = scannerEmitter.addListener("ScanLog", (event: any) => {
         console.log("ScanLog:", event.log);
         addLog("SCAN: " + (event.log || JSON.stringify(event)));
-    });
+      });
 
-    const scanErrorSub = scannerEmitter.addListener("ScanError", (event) => {
-      addLog("SCAN ERROR: " + (event.error || JSON.stringify(event)));
-      Alert.alert("Scan Error", event.error || "Unknown error occurred");
-      setIsScanning(false);
-    });
+      scanErrorSub = scannerEmitter.addListener("ScanError", (event: any) => {
+        addLog("SCAN ERROR: " + (event.error || JSON.stringify(event)));
+        Alert.alert("Scan Error", event.error || "Unknown error occurred");
+        setIsScanning(false);
+      });
+    }
 
     return () => {
-      statusSub.remove();
-      logSub.remove();
-      dataSub.remove();
-      scanSub.remove();
-      scanLogSub.remove();
-      scanErrorSub.remove();
+      statusSub?.remove();
+      logSub?.remove();
+      dataSub?.remove();
+      scanSub?.remove();
+      scanLogSub?.remove();
+      scanErrorSub?.remove();
     };
   }, []);
 
   const handleScanToggle = async () => {
     addLog("Scan button pressed."); // Immediate feedback
     if (isScanning) {
-      BluetoothScannerModule.stopScan();
+      if (BluetoothScannerModule) {
+        BluetoothScannerModule.stopScan();
+      }
       setIsScanning(false);
       addLog("Scanning stopped.");
     } else {
@@ -145,8 +160,12 @@ export default function App() {
       if (hasPerms) {
         setScannedDevices([]);
         addLog("Starting Scan...");
-        BluetoothScannerModule.startScan();
-        setIsScanning(true);
+        if (BluetoothScannerModule) {
+          BluetoothScannerModule.startScan();
+          setIsScanning(true);
+        } else {
+          Alert.alert("Error", "BluetoothScannerModule not found");
+        }
       } else {
         Alert.alert("Permission Denied", "Permissions required to scan.");
         addLog("Scan failed: Permissions denied.");
@@ -158,9 +177,13 @@ export default function App() {
     if (!deviceMac) return Alert.alert("Error", "Select a device first.");
     try {
       addLog(`Connecting to ${deviceMac}...`);
-      await BlufiBridge.connect(deviceMac);
+      if (BlufiBridge) {
+        await BlufiBridge.connect(deviceMac);
+      } else {
+        throw new Error("BlufiBridge not found");
+      }
       // Fallback: Assume connected if no error thrown, in case event is missed
-      setConnected(true); 
+      setConnected(true);
     } catch (e: any) {
       addLog("Error: " + e.message);
       setConnected(false);
@@ -169,7 +192,7 @@ export default function App() {
 
   const handleDisconnect = async () => {
     try {
-      await BlufiBridge.disconnect();
+      if (BlufiBridge) await BlufiBridge.disconnect();
       setConnected(false);
       addLog("Disconnected.");
     } catch (e: any) {
@@ -180,7 +203,7 @@ export default function App() {
   const handleNegotiateSecurity = async () => {
     try {
       addLog("Negotiating Security...");
-      await BlufiBridge.negotiateSecurity();
+      if (BlufiBridge) await BlufiBridge.negotiateSecurity();
     } catch (e: any) {
       addLog("Error: " + e.message);
     }
@@ -189,31 +212,33 @@ export default function App() {
   const handleConfigureWifi = async () => {
     try {
       addLog(`Configuring Wi-Fi: ${ssid}`);
-      await BlufiBridge.configureWifi(ssid, password);
+      if (BlufiBridge) await BlufiBridge.configureWifi(ssid, password);
     } catch (e: any) {
       addLog("Error: " + e.message);
     }
   };
 
   const handleConfigureMqtt = async () => {
-      try {
-          addLog(`Sending MQTT Config: ${mqttServer}:${mqttPort}`);
-          // 1. Send IP
-          await BlufiBridge.postCustomData(`1:${mqttServer}`);
-          // 2. Send Port
-          await BlufiBridge.postCustomData(`2:${mqttPort}`);
-          // 3. Finalize
-          await BlufiBridge.postCustomData("8:0");
-          addLog("MQTT Config Sent. Waiting for device...");
-      } catch (e: any) {
-          addLog("Error sending MQTT config: " + e.message);
+    try {
+      addLog(`Sending MQTT Config: ${mqttServer}:${mqttPort}`);
+      if (BlufiBridge) {
+        // 1. Send IP
+        await BlufiBridge.postCustomData(`1:${mqttServer}`);
+        // 2. Send Port
+        await BlufiBridge.postCustomData(`2:${mqttPort}`);
+        // 3. Finalize
+        await BlufiBridge.postCustomData("8:0");
       }
+      addLog("MQTT Config Sent. Waiting for device...");
+    } catch (e: any) {
+      addLog("Error sending MQTT config: " + e.message);
+    }
   };
 
   const handlePostCustomData = async () => {
     try {
       addLog(`Sending Data: ${customData}`);
-      await BlufiBridge.postCustomData(customData);
+      if (BlufiBridge) await BlufiBridge.postCustomData(customData);
     } catch (e: any) {
       addLog("Error: " + e.message);
     }
@@ -223,8 +248,10 @@ export default function App() {
     try {
       addLog("Requesting Device Status (sends 12:)...");
       // Reference app sends "12:" to trigger status response with UID
-      await BlufiBridge.postCustomData("12:");
-      await BlufiBridge.requestDeviceStatus();
+      if (BlufiBridge) {
+        await BlufiBridge.postCustomData("12:");
+        await BlufiBridge.requestDeviceStatus();
+      }
     } catch (e: any) {
       addLog("Error: " + e.message);
     }
@@ -233,7 +260,7 @@ export default function App() {
   const handleRequestVersion = async () => {
     try {
       addLog("Requesting Device Version...");
-      await BlufiBridge.requestDeviceVersion();
+      if (BlufiBridge) await BlufiBridge.requestDeviceVersion();
     } catch (e: any) {
       addLog("Error: " + e.message);
     }
@@ -251,19 +278,19 @@ export default function App() {
             <TouchableOpacity style={[styles.btn, styles.btnBlue]} onPress={handleScanToggle}>
               <Text style={styles.btnText}>{isScanning ? "Stop Scan" : "Scan"}</Text>
             </TouchableOpacity>
-            <TouchableOpacity 
-              style={[styles.btn, connected ? styles.btnRed : styles.btnGreen, { marginLeft: 10 }]} 
+            <TouchableOpacity
+              style={[styles.btn, connected ? styles.btnRed : styles.btnGreen, { marginLeft: 10 }]}
               onPress={connected ? handleDisconnect : handleConnect}
             >
               <Text style={styles.btnText}>{connected ? "Disconnect" : "Connect"}</Text>
             </TouchableOpacity>
           </View>
-          
+
           <Text style={styles.subText}>Selected: {deviceMac || "None"}</Text>
 
           {scannedDevices.length > 0 && (
-            <ScrollView 
-              style={styles.deviceList} 
+            <ScrollView
+              style={styles.deviceList}
               nestedScrollEnabled={true}
             >
               {scannedDevices.map((d, i) => (
@@ -272,7 +299,7 @@ export default function App() {
                   BluetoothScannerModule.stopScan();
                   setIsScanning(false);
                 }}>
-                  <Text style={{fontWeight:'bold'}}>{d.name || "Unknown"}</Text>
+                  <Text style={{ fontWeight: 'bold' }}>{d.name || "Unknown"}</Text>
                   <Text>{d.mac} (RSSI: {d.rssi})</Text>
                 </TouchableOpacity>
               ))}
@@ -283,7 +310,7 @@ export default function App() {
         {/* ACTIONS */}
         <View style={[styles.card, { opacity: connected ? 1 : 0.6 }]}>
           <Text style={styles.sectionTitle}>2. Actions</Text>
-          
+
           <TouchableOpacity style={[styles.btn, styles.btnOutline]} onPress={handleNegotiateSecurity} disabled={!connected}>
             <Text style={styles.btnOutlineText}>Negotiate Security</Text>
           </TouchableOpacity>
@@ -292,15 +319,15 @@ export default function App() {
 
           <Text style={styles.label}>Device UID</Text>
           <View style={styles.row}>
-             <TextInput 
-                style={[styles.input, {flex: 1}]} 
-                placeholder="Device UID" 
-                value={deviceUid} 
-                onChangeText={setDeviceUid} 
-             />
-             <TouchableOpacity style={[styles.btn, styles.btnOutline, {marginLeft: 5}]} onPress={handleRequestStatus} disabled={!connected}>
-                <Text style={styles.btnOutlineText}>Get UID</Text>
-             </TouchableOpacity>
+            <TextInput
+              style={[styles.input, { flex: 1 }]}
+              placeholder="Device UID"
+              value={deviceUid}
+              onChangeText={setDeviceUid}
+            />
+            <TouchableOpacity style={[styles.btn, styles.btnOutline, { marginLeft: 5 }]} onPress={handleRequestStatus} disabled={!connected}>
+              <Text style={styles.btnOutlineText}>Get UID</Text>
+            </TouchableOpacity>
           </View>
 
           <View style={styles.divider} />
@@ -313,7 +340,7 @@ export default function App() {
           </TouchableOpacity>
 
           <View style={styles.divider} />
-          
+
           <Text style={styles.label}>MQTT Configuration</Text>
           <TextInput style={styles.input} placeholder="MQTT Server" value={mqttServer} onChangeText={setMqttServer} />
           <TextInput style={styles.input} placeholder="MQTT Port" value={mqttPort} onChangeText={setMqttPort} />
@@ -332,7 +359,7 @@ export default function App() {
           <View style={styles.divider} />
 
           <View style={styles.row}>
-            <TouchableOpacity style={[styles.btn, styles.btnOutline, {flex:1, marginLeft:5}]} onPress={handleRequestVersion} disabled={!connected}>
+            <TouchableOpacity style={[styles.btn, styles.btnOutline, { flex: 1, marginLeft: 5 }]} onPress={handleRequestVersion} disabled={!connected}>
               <Text style={styles.btnOutlineText}>Get Version</Text>
             </TouchableOpacity>
           </View>
@@ -344,7 +371,7 @@ export default function App() {
             <Text key={i} style={styles.logText}>{l}</Text>
           ))}
         </View>
-        <View style={{height: 50}} />
+        <View style={{ height: 50 }} />
       </ScrollView>
     </SafeAreaView>
   );
