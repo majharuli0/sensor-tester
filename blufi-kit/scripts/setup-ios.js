@@ -59,10 +59,12 @@ function setupIOS() {
 
         if (!podfileContent.includes("pod 'BlufiBridge'")) {
             // Insert before the last 'end' of the target block, or just after use_native_modules!
-            if (podfileContent.includes('use_native_modules!')) {
+            // Insert after the line containing use_native_modules!
+            const regex = /use_native_modules!.*$/m;
+            if (regex.test(podfileContent)) {
                 podfileContent = podfileContent.replace(
-                    'use_native_modules!',
-                    "use_native_modules!\n  pod 'BlufiBridge', :path => '.'"
+                    regex,
+                    (match) => `${match}\n  pod 'BlufiBridge', :path => '.'`
                 );
                 fs.writeFileSync(podfilePath, podfileContent);
                 console.log('   ✅ Added BlufiBridge to Podfile');

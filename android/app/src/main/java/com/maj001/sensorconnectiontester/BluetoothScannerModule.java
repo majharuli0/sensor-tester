@@ -100,7 +100,6 @@ public class BluetoothScannerModule extends ReactContextBaseJavaModule {
             BluetoothDevice device = result.getDevice();
             if (device != null) {
                 String address = device.getAddress();
-                // sendLog("Scanned: " + address); // Verbose logging
                 if (!foundDevices.contains(address)) {
                     foundDevices.add(address);
                     
@@ -136,7 +135,6 @@ public class BluetoothScannerModule extends ReactContextBaseJavaModule {
                 .emit(eventName, params);
         } else {
             Log.e(TAG, "No active CatalystInstance, cannot send event: " + eventName);
-            // Removed Toast for production
         }
     }
 

@@ -456,16 +456,25 @@ const ANDROID_MANIFEST_PATH = path.join(PROJECT_ROOT, 'android/app/src/main/Andr
 const BUILD_GRADLE = path.join(PROJECT_ROOT, 'android/app/build.gradle');
 
 function getAndroidPackageName() {
-    if (!fs.existsSync(ANDROID_MANIFEST_PATH)) {
-        console.error('❌ AndroidManifest.xml not found. Is this a React Native project?');
-        return null;
+    // 1. Try AndroidManifest.xml
+    if (fs.existsSync(ANDROID_MANIFEST_PATH)) {
+        const content = fs.readFileSync(ANDROID_MANIFEST_PATH, 'utf8');
+        const match = content.match(/package="([^"]+)"/);
+        if (match && match[1]) {
+            return match[1];
+        }
     }
-    const content = fs.readFileSync(ANDROID_MANIFEST_PATH, 'utf8');
-    const match = content.match(/package="([^"]+)"/);
-    if (match && match[1]) {
-        return match[1];
+
+    // 2. Try build.gradle (namespace)
+    if (fs.existsSync(BUILD_GRADLE)) {
+        const content = fs.readFileSync(BUILD_GRADLE, 'utf8');
+        const match = content.match(/namespace\s+['"]([^'"]+)['"]/);
+        if (match && match[1]) {
+            return match[1];
+        }
     }
-    console.error('❌ Could not parse package name from AndroidManifest.xml');
+
+    console.error('❌ Could not parse package name from AndroidManifest.xml or build.gradle');
     return null;
 }
 
@@ -511,77 +520,33 @@ function installAndroid() {
             console.log('✅ build.gradle already patched');
         }
     }
-}
 
-<<<<<<< HEAD:scripts/setup-android.js
-=======
-function installIOS() {
-    console.log('\n--- Installing iOS Native Modules ---');
-    const projectName = getIOSProjectName();
-    if (!projectName) {
-        console.log('⚠️ iOS project not found (Skipping). Run "npx expo prebuild --platform ios" on Mac.');
-        return;
-    }
-
-    console.log(`ℹ️  Detected iOS Project: ${projectName}`);
-    const targetDir = path.join(IOS_DIR, projectName);
-
-    writeFile(path.join(targetDir, 'BlufiBridge.swift'), BLUFI_BRIDGE_SWIFT);
-    writeFile(path.join(targetDir, 'BluetoothScannerModule.swift'), BLUETOOTH_SCANNER_MODULE_SWIFT);
-    writeFile(path.join(targetDir, 'BlufiBridge.m'), BLUFI_BRIDGE_M);
-    writeFile(path.join(targetDir, 'BluetoothScannerModule.m'), BLUETOOTH_SCANNER_MODULE_M);
-
-    // Patch Podfile
-    const podfilePath = path.join(IOS_DIR, 'Podfile');
-    if (fs.existsSync(podfilePath)) {
-        let podfileContent = fs.readFileSync(podfilePath, 'utf8');
-        if (!podfileContent.includes("pod 'BluFi'")) {
-            console.log('🔧 Patching Podfile...');
-            // Insert after use_expo_modules! or use_react_native!
-            if (podfileContent.includes('use_expo_modules!')) {
-                podfileContent = podfileContent.replace('use_expo_modules!', "use_expo_modules!\n  pod 'BluFi'");
-            } else if (podfileContent.includes('use_react_native!')) {
-                podfileContent = podfileContent.replace('use_react_native!', "pod 'BluFi'\n  use_react_native!");
-            } else {
-                console.log('⚠️ Could not find insertion point in Podfile. Please add "pod \'BluFi\'" manually.');
-            }
-            fs.writeFileSync(podfilePath, podfileContent);
-            console.log('✅ Added BluFi pod to Podfile');
-        } else {
-            console.log('✅ Podfile already patched');
-        }
-    }
-
-    // Patch Info.plist
-    const infoPlistPath = path.join(targetDir, 'Info.plist');
-    if (fs.existsSync(infoPlistPath)) {
-        let plistContent = fs.readFileSync(infoPlistPath, 'utf8');
-        if (!plistContent.includes('NSBluetoothAlwaysUsageDescription')) {
-            console.log('🔧 Patching Info.plist...');
+    // Patch AndroidManifest.xml
+    if (fs.existsSync(ANDROID_MANIFEST_PATH)) {
+        let manifestContent = fs.readFileSync(ANDROID_MANIFEST_PATH, 'utf8');
+        if (!manifestContent.includes('android.permission.BLUETOOTH_SCAN')) {
+            console.log('🔧 Patching AndroidManifest.xml...');
             const permissions = `
-    <key>NSBluetoothAlwaysUsageDescription</key>
-    <string>We need Bluetooth to connect to and provision the sensor device.</string>
-    <key>NSBluetoothPeripheralUsageDescription</key>
-    <string>We need Bluetooth to connect to and provision the sensor device.</string>`;
-            
-            // Insert inside <dict>
-            plistContent = plistContent.replace('<dict>', `<dict>${permissions}`);
-            fs.writeFileSync(infoPlistPath, plistContent);
-            console.log('✅ Added Bluetooth permissions to Info.plist');
+    <uses-permission android:name="android.permission.BLUETOOTH"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"/>
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />`;
+
+            if (manifestContent.includes('<application')) {
+                manifestContent = manifestContent.replace('<application', `${permissions}\n    <application`);
+                fs.writeFileSync(ANDROID_MANIFEST_PATH, manifestContent);
+                console.log('✅ Added Bluetooth permissions to AndroidManifest.xml');
+            } else {
+                console.warn('⚠️ Could not find <application> tag in AndroidManifest.xml');
+            }
         } else {
-            console.log('✅ Info.plist already patched');
+            console.log('✅ AndroidManifest.xml already patched');
         }
     }
-
-    console.log('ℹ️  Run "pod install" in the ios/ directory to finish.');
 }
 
-function installJS() {
-    console.log('\n--- Installing JS SDK ---');
-    writeFile(path.join(SRC_DIR, 'BlufiClient.ts'), BLUFI_CLIENT_TS);
-}
-
->>>>>>> a02077465c6478b05e927abc984833280552924f:scripts/setup-blufi.js
 function main() {
     console.log('🚀 Starting Blufi Android Installer ...');
     installAndroid();

@@ -456,16 +456,25 @@ const ANDROID_MANIFEST_PATH = path.join(PROJECT_ROOT, 'android/app/src/main/Andr
 const BUILD_GRADLE = path.join(PROJECT_ROOT, 'android/app/build.gradle');
 
 function getAndroidPackageName() {
-    if (!fs.existsSync(ANDROID_MANIFEST_PATH)) {
-        console.error('❌ AndroidManifest.xml not found. Is this a React Native project?');
-        return null;
+    // 1. Try AndroidManifest.xml
+    if (fs.existsSync(ANDROID_MANIFEST_PATH)) {
+        const content = fs.readFileSync(ANDROID_MANIFEST_PATH, 'utf8');
+        const match = content.match(/package="([^"]+)"/);
+        if (match && match[1]) {
+            return match[1];
+        }
     }
-    const content = fs.readFileSync(ANDROID_MANIFEST_PATH, 'utf8');
-    const match = content.match(/package="([^"]+)"/);
-    if (match && match[1]) {
-        return match[1];
+
+    // 2. Try build.gradle (namespace)
+    if (fs.existsSync(BUILD_GRADLE)) {
+        const content = fs.readFileSync(BUILD_GRADLE, 'utf8');
+        const match = content.match(/namespace\s+['"]([^'"]+)['"]/);
+        if (match && match[1]) {
+            return match[1];
+        }
     }
-    console.error('❌ Could not parse package name from AndroidManifest.xml');
+
+    console.error('❌ Could not parse package name from AndroidManifest.xml or build.gradle');
     return null;
 }
 
@@ -509,6 +518,31 @@ function installAndroid() {
             console.log('✅ Added Blufi dependency to build.gradle');
         } else {
             console.log('✅ build.gradle already patched');
+        }
+    }
+
+    // Patch AndroidManifest.xml
+    if (fs.existsSync(ANDROID_MANIFEST_PATH)) {
+        let manifestContent = fs.readFileSync(ANDROID_MANIFEST_PATH, 'utf8');
+        if (!manifestContent.includes('android.permission.BLUETOOTH_SCAN')) {
+            console.log('🔧 Patching AndroidManifest.xml...');
+            const permissions = `
+    <uses-permission android:name="android.permission.BLUETOOTH"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"/>
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />`;
+
+            if (manifestContent.includes('<application')) {
+                manifestContent = manifestContent.replace('<application', `${permissions}\n    <application`);
+                fs.writeFileSync(ANDROID_MANIFEST_PATH, manifestContent);
+                console.log('✅ Added Bluetooth permissions to AndroidManifest.xml');
+            } else {
+                console.warn('⚠️ Could not find <application> tag in AndroidManifest.xml');
+            }
+        } else {
+            console.log('✅ AndroidManifest.xml already patched');
         }
     }
 }
